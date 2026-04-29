@@ -1,0 +1,7 @@
+.ipynb_checkpoints/
+*_files/
+*.aux
+*.log
+*.tex
+*.quarto_ipynb
+__pycache__/
