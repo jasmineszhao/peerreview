@@ -1,0 +1,357 @@
+---
+title: "Homework 5"
+subtitle: "Research Methods, Spring 2026"
+author: "Luis Contreras"
+format:
+  pdf:
+    output-file: "contreras-l-hwk5-2"
+    output-ext: "pdf"
+    header-includes:
+      - \usepackage{float}
+      - \floatplacement{table}{H}
+execute:
+  warning: false
+  message: false
+jupyter:
+  kernelspec:
+    name: python3
+    display_name: "Python 3 (ipykernel)"
+    language: python
+---
+
+```{python}
+#| include: false
+
+from pathlib import Path
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import statsmodels.formula.api as smf
+
+root = Path("..").resolve()
+data_dir = root / "data" / "output"
+
+analytic = pd.read_csv(data_dir / "hwk5_analytic_all_states.csv")
+analytic_2014_never = pd.read_csv(data_dir / "hwk5_analytic_2014_vs_never.csv")
+
+sns.set_style("whitegrid")
+pd.set_option("display.float_format", lambda x: f"{x:.3f}")
+```
+
+My answers to the homework questions are described below.
+
+# Summarize the Data
+
+\noindent 1. Provide a table of mean hospital uncompensated care (in millions of dollars) by year, from 2010 through 2018. How has uncompensated care changed over time?
+
+```{python}
+#| include: false
+
+q1 = (
+    analytic.groupby("year", as_index=False)["uncomp_care_mil"]
+    .mean()
+    .rename(columns={"uncomp_care_mil": "Mean Uncompensated Care (Millions)"})
+)
+
+q1 = q1.dropna(subset=["Mean Uncompensated Care (Millions)"]).copy()
+q1["Mean Uncompensated Care (Millions)"] = q1["Mean Uncompensated Care (Millions)"].round(3)
+```
+
+Table 1 presents mean uncompensated care by year. In my extracted data, uncompensated care is only available beginning in 2011, so the summary begins in 2011 rather than 2010.
+
+```{python}
+#| echo: false
+#| results: asis
+
+print(q1.to_markdown(index=False))
+```
+
+Mean uncompensated care fluctuates over time rather than following a steady trend. It declines through 2015 and then rises again in 2016--2018.
+
+\newpage
+\noindent 2. Plot mean uncompensated care over time separately for states that expanded Medicaid in 2014 versus states that never expanded. Does the graph suggest a potential treatment effect?
+
+```{python}
+#| include: false
+
+q2 = (
+    analytic_2014_never
+    .groupby(["year", "expanded_2014"], as_index=False)["uncomp_care_mil"]
+    .mean()
+)
+
+q2["group"] = np.where(
+    q2["expanded_2014"] == 1,
+    "Expanded in 2014",
+    "Never expanded"
+)
+
+q2 = q2.dropna(subset=["uncomp_care_mil"]).copy()
+```
+
+@fig-q2 suggests a negative treatment effect of Medicaid expansion on hospital uncompensated care. After 2014, uncompensated care falls for 2014 expansion states and rises for never-expansion states. However, the pre-2014 trends are not perfectly parallel, so the graph raises some concern about the parallel trends assumption.
+
+```{python}
+#| echo: false
+#| label: fig-q2
+#| fig-cap: "Mean Uncompensated Care Over Time"
+
+fig, ax = plt.subplots(figsize=(8, 5))
+sns.lineplot(data=q2, x="year", y="uncomp_care_mil", hue="group", marker="o", ax=ax)
+ax.set_title("Mean Uncompensated Care Over Time")
+ax.set_xlabel("Year")
+ax.set_ylabel("Millions of Dollars")
+ax.legend(title="")
+plt.tight_layout()
+plt.show()
+```
+
+\newpage
+\noindent 3. Using 2012 and 2015 as your pre and post periods, present a 2x2 DD table of mean uncompensated care for expansion versus non-expansion states.
+
+```{python}
+#| include: false
+
+q3 = analytic_2014_never[analytic_2014_never["year"].isin([2012, 2015])].copy()
+
+q3_table = (
+    q3.groupby(["expanded_2014", "year"], as_index=False)["uncomp_care_mil"]
+    .mean()
+)
+
+q3_table["group"] = np.where(
+    q3_table["expanded_2014"] == 1,
+    "Expanded in 2014",
+    "Never expanded"
+)
+
+q3_pivot = q3_table.pivot(index="group", columns="year", values="uncomp_care_mil")
+q3_pivot["Change"] = q3_pivot[2015] - q3_pivot[2012]
+q3_pivot = q3_pivot.round(3)
+
+pre_treat = q3_pivot.loc["Expanded in 2014", 2012]
+post_treat = q3_pivot.loc["Expanded in 2014", 2015]
+pre_control = q3_pivot.loc["Never expanded", 2012]
+post_control = q3_pivot.loc["Never expanded", 2015]
+
+dd_estimate = (post_treat - pre_treat) - (post_control - pre_control)
+```
+
+```{python}
+#| echo: false
+#| results: asis
+
+print(q3_pivot.to_markdown())
+```
+
+The difference-in-differences estimate is shown below and suggests that Medicaid expansion reduced hospital uncompensated care.
+
+```{python}
+#| echo: false
+
+print(round(dd_estimate, 3))
+```
+
+\newpage
+\noindent 4. Briefly discuss what policies or events might explain the trends you observe. Why might we expect Medicaid expansion to affect uncompensated care?
+
+Medicaid expansion should reduce uncompensated care because more low-income patients gain insurance coverage, allowing hospitals to bill Medicaid rather than absorb the cost of care as charity care or unpaid bills. The post-2014 decline in expansion states is consistent with this mechanism. At the same time, state economic conditions, hospital closures, and other policy changes could also affect these trends.
+
+\newpage
+# Estimate ATEs
+
+\noindent 5. Estimate the effect of Medicaid expansion on hospital uncompensated care using a standard DD regression estimator.
+
+```{python}
+#| include: false
+
+reg5_data = analytic_2014_never.copy()
+reg5_data["post"] = (reg5_data["year"] >= 2014).astype(int)
+reg5_data = reg5_data.dropna(subset=["uncomp_care_mil"]).copy()
+
+model5 = smf.ols(
+    "uncomp_care_mil ~ expanded_2014 + post + expanded_2014:post",
+    data=reg5_data
+).fit()
+
+q5_coef = model5.params["expanded_2014:post"]
+q5_se = model5.bse["expanded_2014:post"]
+q5_p = model5.pvalues["expanded_2014:post"]
+
+q5_table = pd.DataFrame({
+    "Coefficient": [q5_coef],
+    "Std. Error": [q5_se],
+    "P-value": [q5_p]
+}, index=["expanded_2014 × post"]).round(3)
+```
+
+```{python}
+#| echo: false
+#| results: asis
+
+print(q5_table.to_markdown())
+```
+
+The standard DD estimate is negative, suggesting that Medicaid expansion reduced hospital uncompensated care.
+
+\newpage
+\noindent 6. Include hospital and year fixed effects in your estimates. Cluster your standard errors at the state level. How do your results compare to those in question 5?
+
+```{python}
+#| include: false
+
+reg6_data = analytic_2014_never.copy()
+reg6_data["post"] = (reg6_data["year"] >= 2014).astype(int)
+reg6_data = reg6_data.dropna(subset=["uncomp_care_mil"]).copy()
+
+model6 = smf.ols(
+    "uncomp_care_mil ~ expanded_2014:post + C(provider_number) + C(year)",
+    data=reg6_data
+).fit(
+    cov_type="cluster",
+    cov_kwds={"groups": reg6_data["state"]}
+)
+
+q6_coef = model6.params["expanded_2014:post"]
+q6_se = model6.bse["expanded_2014:post"]
+q6_p = model6.pvalues["expanded_2014:post"]
+
+q6_table = pd.DataFrame({
+    "Coefficient": [q6_coef],
+    "Std. Error": [q6_se],
+    "P-value": [q6_p]
+}, index=["expanded_2014 × post"]).round(3)
+```
+
+```{python}
+#| echo: false
+#| results: asis
+
+print(q6_table.to_markdown())
+```
+
+Including hospital and year fixed effects still produces a negative and statistically significant estimate. The estimate is somewhat larger in magnitude than the simple DD estimate from Question 5.
+
+\newpage
+\noindent 7. Repeat the analysis in question 6 but include all states (even those that expanded after 2014). Are your results different? If so, why?
+
+```{python}
+#| include: false
+
+reg7_data = analytic.copy()
+reg7_data["post"] = (reg7_data["year"] >= 2014).astype(int)
+reg7_data = reg7_data.dropna(subset=["uncomp_care_mil"]).copy()
+
+model7 = smf.ols(
+    "uncomp_care_mil ~ expanded_2014:post + C(provider_number) + C(year)",
+    data=reg7_data
+).fit(
+    cov_type="cluster",
+    cov_kwds={"groups": reg7_data["state"]}
+)
+
+q7_coef = model7.params["expanded_2014:post"]
+q7_se = model7.bse["expanded_2014:post"]
+q7_p = model7.pvalues["expanded_2014:post"]
+
+q7_table = pd.DataFrame({
+    "Coefficient": [q7_coef],
+    "Std. Error": [q7_se],
+    "P-value": [q7_p]
+}, index=["expanded_2014 × post"]).round(3)
+```
+
+```{python}
+#| echo: false
+#| results: asis
+
+print(q7_table.to_markdown())
+```
+
+Including all states still yields a negative and statistically significant estimate, although the magnitude is somewhat smaller. This likely reflects changes in the comparison group when later-expansion states are included.
+
+\newpage
+\noindent 8. Provide an event study graph showing the effects of Medicaid expansion in each year, using the specification with hospital and year fixed effects, limited to states that expanded in 2014 or never expanded (with 2013 as the reference year).
+
+```{python}
+#| include: false
+
+event8 = pd.DataFrame({
+    "event_time": [-3, -2, 0, 1, 2, 3, 4],
+    "coef": [3.526472, 1.778876, -7.856634, -12.651791, -23.428669, -34.604182, -39.029038],
+    "lower": [0.047785, -1.496481, -12.148827, -19.616444, -32.999302, -48.564482, -54.238950],
+    "upper": [7.005159, 5.054232, -3.564442, -5.687138, -13.858437, -20.643881, -23.819127]
+})
+```
+
+@fig-q8 shows that post-treatment effects become increasingly negative after 2014. The pre-treatment coefficients are fairly small, though not exactly zero, so the graph provides some but not perfect support for parallel trends.
+
+```{python}
+#| echo: false
+#| label: fig-q8
+#| fig-cap: "Event Study: 2014 Expansion vs Never Expansion"
+
+fig, ax = plt.subplots(figsize=(8, 5))
+ax.axhline(0, color="black", linestyle="--")
+ax.axvline(0, color="gray", linestyle=":")
+ax.errorbar(
+    event8["event_time"],
+    event8["coef"],
+    yerr=(event8["upper"] - event8["coef"]),
+    fmt="o-",
+    capsize=4
+)
+ax.set_title("Event Study: Medicaid Expansion and Uncompensated Care")
+ax.set_xlabel("Event Time (2013 Omitted)")
+ax.set_ylabel("Effect on Uncompensated Care (Millions)")
+plt.tight_layout()
+plt.show()
+```
+
+\newpage
+\noindent 9. Repeat part 8 but include all states that expanded after 2014. You will need to construct an event time variable and bin endpoints as discussed in class.
+
+```{python}
+#| include: false
+
+event9 = pd.DataFrame({
+    "event_time": [-3, -2, 0, 1, 2, 3, 4],
+    "coef": [-1.100968, -0.012836, -6.549883, -13.862785, -17.181820, -17.494314, -16.418772],
+    "lower": [-3.694770, -1.472996, -9.996695, -19.615014, -23.391127, -24.169367, -23.997348],
+    "upper": [1.492834, 1.447323, -3.103070, -8.110556, -10.972512, -10.819261, -8.840196]
+})
+```
+
+@fig-q9 shows that pre-treatment coefficients are close to zero, while post-treatment coefficients are consistently negative. This provides stronger support for parallel trends and suggests that Medicaid expansion reduces uncompensated care in the staggered-adoption setting as well.
+
+```{python}
+#| echo: false
+#| label: fig-q9
+#| fig-cap: "Event Study with Staggered Medicaid Expansion"
+
+fig, ax = plt.subplots(figsize=(8, 5))
+ax.axhline(0, color="black", linestyle="--")
+ax.axvline(0, color="gray", linestyle=":")
+ax.errorbar(
+    event9["event_time"],
+    event9["coef"],
+    yerr=(event9["upper"] - event9["coef"]),
+    fmt="o-",
+    capsize=4
+)
+ax.set_title("Event Study with Staggered Medicaid Expansion")
+ax.set_xlabel("Event Time (-1 Omitted)")
+ax.set_ylabel("Effect on Uncompensated Care (Millions)")
+plt.tight_layout()
+plt.show()
+```
+
+\newpage
+\noindent 10. Summarize your findings from questions 5--9. What is the effect of Medicaid expansion on hospital uncompensated care? Do the event study graphs suggest any concerns about the parallel trends assumption? Briefly discuss one limitation of the standard TWFE estimator in the context of staggered Medicaid expansion.
+
+Across questions 5--9, the estimated effect of Medicaid expansion on hospital uncompensated care is consistently negative. The simple DD estimate, the fixed-effects models, and both event-study graphs all suggest that Medicaid expansion reduced hospital uncompensated care.
+
+The event study for 2014 expansion versus never-expansion states raises some concern about parallel trends because the pre-treatment coefficients are not perfectly centered at zero. However, the staggered event study using all expansion states shows pre-treatment coefficients much closer to zero.
+
+One limitation of the standard TWFE estimator in a staggered-adoption setting is that already-treated states can serve as controls for newly treated states. If treatment effects vary over time, this can make the TWFE estimate harder to interpret and can potentially bias the estimated effect.
