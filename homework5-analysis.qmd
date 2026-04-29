@@ -1,0 +1,336 @@
+---
+title: "Peer Review Replication"
+author: "Jasmine Zhao"
+format:
+  pdf:
+    output-file: "zhao-j-replication"
+    output-ext: "pdf"
+    header-includes:
+      - \usepackage{float}
+      - \floatplacement{table}{H}
+      - \usepackage{booktabs}
+execute:
+  warning: false
+  message: false
+echo: false
+jupyter: econ470-a0kernel
+---
+
+```{python}
+from pathlib import Path
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import statsmodels.formula.api as smf
+
+root = Path("/home/jszhao/econ470/a0/work/peerreview")
+data_dir = root / "data" / "output"
+
+analytic = pd.read_csv(data_dir / "hwk5_analytic_all_states.csv")
+analytic_2014_never = pd.read_csv(data_dir / "hwk5_analytic_2014_vs_never.csv")
+
+```
+
+
+\noindent 1. Provide a table of mean hospital uncompensated care (in millions of dollars) by year, from 2010 through 2018. How has uncompensated care changed over time?
+
+```{python}
+q1 = (
+    analytic.groupby("year", as_index=False)["uncomp_care_mil"]
+    .mean()
+    .rename(columns={"uncomp_care_mil": "mean_uncomp_care_mil"})
+)
+
+q1 = q1.dropna(subset=["mean_uncomp_care_mil"]).copy()
+q1["mean_uncomp_care_mil"] = q1["mean_uncomp_care_mil"].round(3)
+q1
+```
+
+```{python}
+plt.figure(figsize=(8,5))
+sns.lineplot(data=q1, x="year", y="mean_uncomp_care_mil", marker="o")
+plt.title("Mean Hospital Uncompensated Care by Year")
+plt.xlabel("Year")
+plt.ylabel("Millions of Dollars")
+plt.show()
+```
+\newpage
+\noindent 2. Plot mean uncompensated care over time separately for states that expanded Medicaid in 2014 versus states that never expanded. Does the graph suggest a potential treatment effect?
+
+```{python}
+q2 = (
+    analytic_2014_never
+    .groupby(["year", "expanded_2014"], as_index=False)["uncomp_care_mil"]
+    .mean()
+)
+
+q2["group"] = np.where(
+    q2["expanded_2014"] == 1,
+    "Expanded in 2014",
+    "Never expanded"
+)
+
+q2 = q2.dropna(subset=["uncomp_care_mil"]).copy()
+q2
+```
+
+```{python}
+plt.figure(figsize=(8,5))
+sns.lineplot(data=q2, x="year", y="uncomp_care_mil", hue="group", marker="o")
+plt.title("Mean Uncompensated Care Over Time")
+plt.xlabel("Year")
+plt.ylabel("Millions of Dollars")
+plt.legend(title="")
+plt.show()
+```
+\newpage
+\noindent 3. Using 2012 and 2015 as your pre and post periods, present a 2x2 DD table of mean uncompensated care for expansion versus non-expansion states.
+
+```{python}
+q3 = analytic_2014_never[
+    analytic_2014_never["year"].isin([2012, 2015])
+].copy()
+
+q3_table = (
+    q3.groupby(["expanded_2014", "year"], as_index=False)["uncomp_care_mil"]
+    .mean()
+)
+
+q3_table["group"] = np.where(
+    q3_table["expanded_2014"] == 1,
+    "Expanded in 2014",
+    "Never expanded"
+)
+
+q3_pivot = q3_table.pivot(index="group", columns="year", values="uncomp_care_mil")
+q3_pivot["Change"] = q3_pivot[2015] - q3_pivot[2012]
+q3_pivot
+```
+
+```{python}
+pre_treat = q3_pivot.loc["Expanded in 2014", 2012]
+post_treat = q3_pivot.loc["Expanded in 2014", 2015]
+pre_control = q3_pivot.loc["Never expanded", 2012]
+post_control = q3_pivot.loc["Never expanded", 2015]
+
+dd_estimate = (post_treat - pre_treat) - (post_control - pre_control)
+dd_estimate
+```
+\newpage
+# Estimate ATEs
+
+\noindent 5. Estimate the effect of Medicaid expansion on hospital uncompensated care using a standard DD regression estimator.
+
+```{python}
+reg5_data = analytic_2014_never.copy()
+reg5_data = reg5_data.dropna(subset=["uncomp_care_mil"]).copy()
+
+model5 = smf.ols(
+    "uncomp_care_mil ~ expanded_2014 + post + expanded_2014:post",
+    data=reg5_data
+).fit()
+
+print(model5.summary())
+print("coef =", model5.params["expanded_2014:post"])
+print("se   =", model5.bse["expanded_2014:post"])
+print("pval =", model5.pvalues["expanded_2014:post"])
+```
+\newpage
+\noindent 6. Include hospital and year fixed effects in your estimates. Cluster your standard errors at the state level. How do your results compare to those in question 5?
+
+```{python}
+reg6_data = analytic_2014_never.copy()
+reg6_data = reg6_data.dropna(subset=["uncomp_care_mil"]).copy()
+
+model6 = smf.ols(
+    "uncomp_care_mil ~ expanded_2014:post + C(provider_number) + C(year)",
+    data=reg6_data
+).fit(
+    cov_type="cluster",
+    cov_kwds={"groups": reg6_data["state"]}
+)
+
+print("coef =", model6.params["expanded_2014:post"])
+print("se   =", model6.bse["expanded_2014:post"])
+print("pval =", model6.pvalues["expanded_2014:post"])
+```
+\newpage
+\noindent 7. Repeat the analysis in question 6 but include all states (even those that expanded after 2014). Are your results different? If so, why?
+
+```{python}
+reg7_data = analytic.copy()
+reg7_data = reg7_data.dropna(subset=["uncomp_care_mil"]).copy()
+
+model7 = smf.ols(
+    "uncomp_care_mil ~ expanded_2014:post + C(provider_number) + C(year)",
+    data=reg7_data
+).fit(
+    cov_type="cluster",
+    cov_kwds={"groups": reg7_data["state"]}
+)
+
+print("coef =", model7.params["expanded_2014:post"])
+print("se   =", model7.bse["expanded_2014:post"])
+print("pval =", model7.pvalues["expanded_2014:post"])
+```
+\newpage
+\noindent 8. Provide an event study graph showing the effects of Medicaid expansion in each year, using the specification with hospital and year fixed effects, limited to states that expanded in 2014 or never expanded (with 2013 as the reference year).
+
+```{python}
+reg8_data = analytic_2014_never.copy()
+reg8_data = reg8_data.dropna(subset=["uncomp_care_mil"]).copy()
+
+reg8_data["event_time"] = reg8_data["year"] - 2014
+reg8_data["treat_2014"] = reg8_data["expanded_2014"]
+
+event_map = {
+    -3: "event_m3",
+    -2: "event_m2",
+     0: "event_0",
+     1: "event_1",
+     2: "event_2",
+     3: "event_3",
+     4: "event_4"
+}
+
+for e, name in event_map.items():
+    reg8_data[name] = (
+        (reg8_data["event_time"] == e) & (reg8_data["treat_2014"] == 1)
+    ).astype(int)
+```
+
+```{python}
+event_terms = " + ".join(event_map.values())
+
+formula8 = f"uncomp_care_mil ~ {event_terms} + C(provider_number) + C(year)"
+formula8
+```
+
+```{python}
+model8 = smf.ols(
+    formula8,
+    data=reg8_data
+).fit(
+    cov_type="cluster",
+    cov_kwds={"groups": reg8_data["state"]}
+)
+```
+
+```{python}
+event_rows = []
+
+for e, name in event_map.items():
+    coef = model8.params[name]
+    se = model8.bse[name]
+    event_rows.append({
+        "event_time": e,
+        "coef": coef,
+        "se": se,
+        "lower": coef - 1.96 * se,
+        "upper": coef + 1.96 * se
+    })
+
+event_df = pd.DataFrame(event_rows).sort_values("event_time")
+event_df
+```
+
+```{python}
+plt.figure(figsize=(8,5))
+plt.axhline(0, color="black", linestyle="--")
+plt.axvline(0, color="gray", linestyle=":")
+plt.errorbar(
+    event_df["event_time"],
+    event_df["coef"],
+    yerr=1.96 * event_df["se"],
+    fmt="o-",
+    capsize=4
+)
+plt.title("Event Study: Medicaid Expansion and Uncompensated Care")
+plt.xlabel("Event Time (Years Relative to 2014, 2013 Omitted)")
+plt.ylabel("Effect on Uncompensated Care (Millions)")
+plt.show()
+```
+
+```{python}
+reg9_data = analytic.copy()
+reg9_data = reg9_data.dropna(subset=["uncomp_care_mil", "expansion_year"]).copy()
+reg9_data = reg9_data[reg9_data["expanded"] == 1].copy()
+```
+
+```{python}
+reg9_data["event_time"] = reg9_data["year"] - reg9_data["expansion_year"]
+```
+\newpage
+\noindent 9. Repeat part 8 but include all states that expanded after 2014. You will need to construct an event time variable and bin endpoints as discussed in class.
+
+```{python}
+reg9_data["event_time_binned"] = reg9_data["event_time"].clip(lower=-3, upper=4)
+```
+
+```{python}
+event_map9 = {
+    -3: "event_m3",
+    -2: "event_m2",
+     0: "event_0",
+     1: "event_1",
+     2: "event_2",
+     3: "event_3",
+     4: "event_4"
+}
+
+for e, name in event_map9.items():
+    reg9_data[name] = (reg9_data["event_time_binned"] == e).astype(int)
+```
+
+```{python}
+event_terms9 = " + ".join(event_map9.values())
+formula9 = f"uncomp_care_mil ~ {event_terms9} + C(provider_number) + C(year)"
+formula9
+```
+
+```{python}
+model9 = smf.ols(
+    formula9,
+    data=reg9_data
+).fit(
+    cov_type="cluster",
+    cov_kwds={"groups": reg9_data["state"]}
+)
+```
+
+```{python}
+event_rows9 = []
+
+for e, name in event_map9.items():
+    coef = model9.params[name]
+    se = model9.bse[name]
+    event_rows9.append({
+        "event_time": e,
+        "coef": coef,
+        "se": se,
+        "lower": coef - 1.96 * se,
+        "upper": coef + 1.96 * se
+    })
+
+event_df9 = pd.DataFrame(event_rows9).sort_values("event_time")
+event_df9
+```
+
+```{python}
+plt.figure(figsize=(8,5))
+plt.axhline(0, color="black", linestyle="--")
+plt.axvline(0, color="gray", linestyle=":")
+plt.errorbar(
+    event_df9["event_time"],
+    event_df9["coef"],
+    yerr=1.96 * event_df9["se"],
+    fmt="o-",
+    capsize=4
+)
+plt.title("Event Study with Staggered Medicaid Expansion")
+plt.xlabel("Event Time (Relative to Expansion Year, -1 Omitted)")
+plt.ylabel("Effect on Uncompensated Care (Millions)")
+plt.show()
+```
+
